@@ -1,0 +1,83 @@
+version: '3.3'
+services:
+
+  # Контейнер с базой данных PostgreSQL для Zabbix
+  zabbix-postgres:
+    container_name: zabbix-postgres
+    image: postgres:14
+    expose:
+      - "5432"
+    volumes:
+      - zabbix-postgres:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -h 127.0.0.1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  # Контейнер с сервером Zabbix
+  zabbix-server:
+    container_name: zabbix-server
+    image: zabbix/zabbix-server-pgsql:6.2.0-centos
+    environment:
+      DB_SERVER_HOST: zabbix-postgres
+      DB_SERVER_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      ZBX_VALUECACHESIZE: 64M
+      ZBX_CACHESIZE: 128M
+      ZBX_TRENDCACHESIZE: 128M
+    ports:
+      - "10051:10051"
+    restart: unless-stopped
+    depends_on:
+      - zabbix-postgres
+
+  # Веб-интерфейс Zabbix с использованием Nginx
+  zabbix-web:
+    container_name: zabbix-web
+    image: zabbix/zabbix-web-nginx-pgsql:centos-6.2.0
+    environment:
+      DB_SERVER_HOST: zabbix-postgres
+      DB_SERVER_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      ZBX_SERVER_HOST: zabbix-server
+      ZBX_SERVER_PORT: 10051
+      PHP_TZ: Europe/Samara
+     ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    labels:
+      - traefik.enable=true
+      - traefik.http.middlewares.zabbix-web_https.redirectscheme.scheme=https
+      - traefik.http.routers.zabbix-web.entrypoints=web
+      - traefik.http.routers.zabbix-web.middlewares=zabbix-web_https@docker
+      - traefik.http.routers.zabbix-web.rule=Host(`zabbix.${DOMAIN}`)
+      - traefik.http.routers.zabbix-web_https.entrypoints=websecure
+      - traefik.http.routers.zabbix-web_https.rule=Host(`zabbix.${DOMAIN}`)
+      - traefik.http.routers.zabbix-web_https.tls=true
+      - traefik.http.routers.zabbix-web_https.tls.certresolver=le
+      - traefik.http.services.zabbix-web.loadbalancer.server.port=8080
+    restart: unless-stopped
+    depends_on:
+      - zabbix-postgres
+
+volumes:
+  zabbix-postgres:
+
+networks:
+  default:
+    external:
+      name: traefik_network
